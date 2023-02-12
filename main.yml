@@ -1,0 +1,113 @@
+---
+
+# ansible-playbook -e "fail2ban_bantime= fail2ban_findtime= sshd_port=" -i <host>, -k -u <user> main.yml
+
+- hosts: all
+
+  pre_tasks:
+    - ansible.builtin.assert:
+        that:
+          - fail2ban_bantime is defined
+          - fail2ban_findtime is defined
+          - sshd_port is defined
+
+  roles:
+    - role: geerlingguy.docker
+      vars:
+        docker_install_compose: no
+
+  tasks:
+    - ansible.builtin.apt:
+        name: fail2ban
+
+    - ansible.builtin.systemd:
+        name: fail2ban
+        enabled: yes
+
+    - ansible.builtin.file:
+        path: /etc/systemd/system/apt-daily-upgrade.timer.d
+        state: directory
+
+    - ansible.builtin.copy:
+        content: "{{ item.content | default(omit) }}"
+        src: "{{ item.src | default(omit) }}"
+        dest: "{{ item.dest }}"
+        remote_src: "{{ item.remote_src | default(omit) }}"
+        force: "{{ item.force | default(omit) }}"
+      loop:
+        - src: /etc/fail2ban/jail.conf
+          dest: /etc/fail2ban/jail.local
+          remote_src: yes
+          force: no
+        - content: |-
+            [Timer]
+            OnCalendar=
+            OnCalendar=*-*-* 4:00
+          dest: /etc/systemd/system/apt-daily-upgrade.timer.d/override.conf
+
+    - community.general.ini_file:
+        path: /etc/fail2ban/jail.local
+        section: "{{ item.section }}"
+        option: "{{ item.option }}"
+        value: "{{ item.value }}"
+      loop:
+        - section: DEFAULT
+          option: banaction
+          value: iptables-allports
+        - section: DEFAULT
+          option: bantime
+          value: "{{ fail2ban_bantime }}"
+        - section: DEFAULT
+          option: findtime
+          value: "{{ fail2ban_findtime }}"
+        - section: sshd
+          option: mode
+          value: aggressive
+
+    - ansible.builtin.cron:
+        name: "{{ item.name }}"
+        job: "{{ item.job }}"
+        special_time: "{{ item.special_time | default(omit) }}"
+        hour: "{{ item.hour | default(omit) }}"
+        minute: "{{ item.minute | default(omit) }}"
+        weekday: "{{ item.weekday | default(omit) }}"
+      loop:
+        - name: APT clean
+          job: /usr/bin/apt -y autoremove > /dev/null 2>&1 && /usr/bin/apt autoclean > /dev/null 2>&1
+          special_time: reboot
+        - name: APT upgrade
+          job: /usr/bin/apt update > /dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive /usr/bin/apt -y upgrade > /dev/null 2>&1 && /usr/bin/sleep 5m && /usr/sbin/reboot
+          hour: 3
+          minute: 3
+          weekday: 1
+        - name: Docker prune
+          job: /usr/bin/docker system prune --all --force --volumes
+          hour: 3
+          minute: 3
+          weekday: 0
+
+    - community.general.ufw:
+        rule: allow
+        to_port: "{{ sshd_port }}"
+        proto: tcp
+
+    - ansible.builtin.lineinfile:
+        path: "{{ item.path }}"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - path: /etc/apt/apt.conf.d/50unattended-upgrades
+          regexp: ^(\/\/)?Unattended-Upgrade::Automatic-Reboot\s
+          line: Unattended-Upgrade::Automatic-Reboot "true";
+        - path: /etc/ssh/sshd_config
+          regexp: ^#?Port\s
+          line: Port {{ sshd_port }}
+
+    - community.general.timezone:
+        name: Europe/Stockholm
+
+    - ansible.builtin.reboot:
+        reboot_timeout: 0
+      register: reboot_result
+      changed_when: reboot_result.rebooted
+      failed_when: not reboot_result.rebooted
