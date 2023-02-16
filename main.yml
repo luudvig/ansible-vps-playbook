@@ -72,19 +72,14 @@
         minute: "{{ item.minute | default(omit) }}"
         weekday: "{{ item.weekday | default(omit) }}"
       loop:
-        - name: APT clean
-          job: /usr/bin/apt -y autoremove > /dev/null 2>&1 && /usr/bin/apt autoclean > /dev/null 2>&1
+        - name: Clean
+          job: /usr/bin/apt -y autoremove > /dev/null 2>&1 && /usr/bin/apt autoclean > /dev/null 2>&1 && /usr/bin/sleep 5m && /usr/bin/docker system prune --all --force --volumes > /dev/null 2>&1
           special_time: reboot
-        - name: APT upgrade
+        - name: Upgrade
           job: /usr/bin/apt update > /dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive /usr/bin/apt -y upgrade > /dev/null 2>&1 && /usr/bin/sleep 5m && /usr/sbin/reboot
           hour: 3
           minute: 3
           weekday: 1
-        - name: Docker prune
-          job: /usr/bin/docker system prune --all --force --volumes
-          hour: 3
-          minute: 3
-          weekday: 0
 
     - community.general.ufw:
         rule: allow
